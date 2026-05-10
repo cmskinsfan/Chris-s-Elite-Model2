@@ -1,118 +1,662 @@
-name: Daily Dinger Report Build
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Dinger Report</title>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;700&family=Epilogue:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0d0d0d;--surface:#161616;--surface2:#1e1e1e;--surface3:#252525;
+  --gold:#d4a843;--gold2:#f0c84a;--red:#c43b3b;--green:#3a8f52;--blue:#3d7ab5;--purple:#7b5ea7;
+  --text:#f0ede8;--text2:#a8a39b;--text3:#6b6560;--border:#2a2a2a;--border2:#333;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:'Epilogue',sans-serif;background:var(--bg);color:var(--text);font-size:13px;line-height:1.55}
+.mast{padding:2.5rem 1.5rem 2rem;background:var(--surface);position:relative;overflow:hidden}
+.mast::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,transparent,var(--gold),transparent)}
+.mi{max-width:1100px;margin:0 auto}
+.mt{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:1.25rem;flex-wrap:wrap;gap:.5rem}
+.brand{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:3px;color:var(--gold);text-transform:uppercase;opacity:.7}
+.dt{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:2px;color:var(--text3)}
+h1{font-family:'Newsreader',serif;font-size:clamp(1.8rem,5vw,3.2rem);font-weight:700;line-height:1.05;letter-spacing:-.04em;color:var(--text);margin-bottom:.4rem}
+h1 em{color:var(--gold);font-style:italic}
+.msub{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:1px;color:var(--text3);margin-bottom:1rem}
+.tags{display:flex;gap:5px;flex-wrap:wrap}
+.tag{font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:500;padding:3px 9px;border-radius:2px;letter-spacing:.5px;text-transform:uppercase;border:1px solid}
+.tr{background:rgba(196,59,59,.2);color:#e87070;border-color:rgba(196,59,59,.3)}
+.tg{background:rgba(58,143,82,.2);color:#72c48a;border-color:rgba(58,143,82,.3)}
+.ta{background:rgba(212,168,67,.15);color:var(--gold);border-color:rgba(212,168,67,.25)}
+.tb{background:rgba(61,122,181,.15);color:#7aaddb;border-color:rgba(61,122,181,.25)}
+.nav{background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100}
+.nr{max-width:1100px;margin:0 auto;display:flex;overflow-x:auto;scrollbar-width:none}
+.nr::-webkit-scrollbar{display:none}
+.nb{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);padding:11px 16px;cursor:pointer;border:none;background:transparent;border-bottom:2px solid transparent;white-space:nowrap;transition:all .15s}
+.nb:hover{color:var(--text2)}.nb.on{color:var(--gold);border-bottom-color:var(--gold)}
+.page{max-width:1100px;margin:0 auto;padding:1.5rem 1rem}
+.panel{display:none}.panel.on{display:block}
+.al{border-left:3px solid;padding:.7rem 1rem;margin-bottom:.85rem;border-radius:0 4px 4px 0;font-size:12px;line-height:1.65}
+.al-r{background:rgba(196,59,59,.12);border-color:var(--red);color:#f0a0a0}
+.al-a{background:rgba(212,168,67,.1);border-color:var(--gold);color:var(--gold)}
+.al-g{background:rgba(58,143,82,.1);border-color:var(--green);color:#72c48a}
+.al strong{color:var(--text);font-weight:600}
+.slbl{font-family:'JetBrains Mono',monospace;font-size:8px;letter-spacing:3px;text-transform:uppercase;color:var(--text3);padding:.85rem 0 .6rem;border-bottom:1px solid var(--border);margin-bottom:1rem}
+/* PICK CARDS */
+.pc{background:var(--surface);border-radius:8px;overflow:hidden;margin-bottom:1rem}
+.pc.gold{border:1.5px solid var(--gold)}.pc.std{border:1px solid var(--border)}
+.pch{padding:.75rem 1.1rem;border-bottom:1px solid var(--border)}
+.ph-b4{background:linear-gradient(90deg,rgba(123,94,167,.15),transparent)}
+.ph-amb{background:linear-gradient(90deg,rgba(212,168,67,.1),transparent)}
+.ph-grn{background:linear-gradient(90deg,rgba(58,143,82,.1),transparent)}
+.ph-pair{background:linear-gradient(90deg,rgba(123,94,167,.1),transparent)}
+.pbadge{font-family:'JetBrains Mono',monospace;font-size:8px;padding:3px 10px;border-radius:2px;text-transform:uppercase;letter-spacing:.5px}
+.pb-pur{background:rgba(123,94,167,.25);color:#b89fd4}
+.pb-amb{background:rgba(212,168,67,.2);color:var(--gold)}
+.pb-grn{background:rgba(58,143,82,.2);color:#72c48a}
+.ptitle{font-family:'Newsreader',serif;font-size:1rem;font-weight:700;color:var(--text);margin:4px 0 2px}
+.psub{font-size:11px;color:var(--text3)}
+.pbody{padding:.75rem 1.1rem;display:flex;flex-direction:column;gap:8px}
+.pick{display:grid;grid-template-columns:28px 1fr auto;gap:10px;align-items:start;padding:.65rem .85rem;border-radius:5px;background:var(--surface2)}
+.pnum{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;flex-shrink:0;margin-top:2px}
+.np{background:var(--purple);color:#fff}.ng{background:var(--green);color:#000}.na{background:var(--gold);color:#000}
+.pname{font-family:'Newsreader',serif;font-size:13px;font-weight:600;color:var(--text);margin-bottom:2px}
+.pgame{font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--text3);margin-bottom:4px}
+.ptgs{display:flex;gap:3px;flex-wrap:wrap;margin-bottom:4px}
+.tg2{font-family:'JetBrains Mono',monospace;font-size:7px;padding:1px 4px;border-radius:2px;font-weight:500;text-transform:uppercase}
+.te{background:rgba(196,59,59,.2);color:#e87070}
+.tam{background:rgba(212,168,67,.15);color:var(--gold)}
+.tgr{background:rgba(58,143,82,.2);color:#72c48a}
+.tp{background:rgba(123,94,167,.2);color:#b89fd4}
+.tx{background:var(--surface3);color:var(--text3)}
+.pwhy{font-size:11px;color:var(--text2);line-height:1.65}
+.chip{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;padding:4px 11px;border-radius:3px;white-space:nowrap;flex-shrink:0;align-self:flex-start;margin-top:2px}
+.ce{background:rgba(196,59,59,.2);color:#e87070}
+.ca{background:rgba(212,168,67,.2);color:var(--gold)}
+.cm{background:rgba(61,122,181,.2);color:#7aaddb}
+/* GAME GRID */
+.gg{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+@media(max-width:680px){.gg{grid-template-columns:1fr}}
+.gc{background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.gc.elite{border:1.5px solid var(--red)}.gc.high{border:1px solid var(--gold)}
+.gh{padding:9px 13px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:5px}
+.gh-e{background:rgba(196,59,59,.12)}.gh-h{background:rgba(212,168,67,.1)}
+.gh-m{background:rgba(61,122,181,.1)}.gh-l{background:rgba(58,143,82,.1)}
+.gtitle{font-family:'Newsreader',serif;font-size:13px;font-weight:600;color:var(--text)}
+.pds{font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:500;padding:2px 8px;border-radius:2px}
+.pde{background:rgba(196,59,59,.3);color:#e87070}.pdh{background:rgba(212,168,67,.25);color:var(--gold)}
+.pdm{background:rgba(61,122,181,.2);color:#7aaddb}.pdl{background:rgba(58,143,82,.2);color:#72c48a}
+.bats-row{display:flex;flex-direction:column}
+.br{display:flex;align-items:center;gap:5px;padding:5px 10px;border-bottom:1px solid var(--border)}
+.br:last-child{border-bottom:none}.br:hover{background:var(--surface2)}
+.rk{width:15px;height:15px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;flex-shrink:0;font-family:'JetBrains Mono',monospace}
+.r1{background:#e87070;color:#000}.r2{background:var(--gold);color:#000}.r3{background:#7aaddb;color:#000}.r4{background:var(--text3);color:#000}.r5{background:var(--surface3);color:var(--text3)}
+.sl{font-family:'JetBrains Mono',monospace;font-size:8px;font-weight:500;padding:1px 5px;border-radius:2px;flex-shrink:0}
+.slc{background:rgba(123,94,167,.25);color:#b89fd4}.sls{background:var(--surface3);color:var(--text3)}
+.hnd{font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--text3);width:10px;flex-shrink:0}
+.bi{flex:1;min-width:0}
+.bn{font-size:11px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bt{display:flex;gap:2px;flex-wrap:wrap;margin-top:2px}
+.sc{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;flex-shrink:0;min-width:26px;text-align:right}
+.se{color:#e87070}.sh{color:var(--gold)}.sm{color:#7aaddb}.sx{color:var(--text3)}
+/* PAIRS */
+.pair-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+@media(max-width:640px){.pair-grid{grid-template-columns:1fr}}
+.pair-card{background:var(--surface);border:1px solid var(--purple);border-radius:8px;overflow:hidden}
+.pair-hdr{padding:.75rem 1rem;background:rgba(123,94,167,.08);border-bottom:1px solid var(--border)}
+.pair-type{font-family:'JetBrains Mono',monospace;font-size:8px;padding:2px 8px;border-radius:2px;background:rgba(123,94,167,.2);color:#b89fd4;text-transform:uppercase;letter-spacing:.5px}
+.pair-title{font-family:'Newsreader',serif;font-size:.95rem;font-weight:700;color:var(--text);margin-top:4px}
+.pair-logic{font-size:11px;color:var(--text3);margin-top:2px;line-height:1.55}
+.pair-bats{padding:.65rem 1rem;display:flex;flex-direction:column;gap:6px}
+.pair-bat{display:flex;align-items:center;gap:8px;padding:.5rem .75rem;background:var(--surface2);border-radius:4px;border-left:2px solid var(--purple)}
+.pb-name{font-family:'Newsreader',serif;font-size:12px;font-weight:600;color:var(--text);flex:1}
+.pb-detail{font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--text3)}
+.pb-score{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700}
+.pair-conn{text-align:center;font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--purple);padding:2px 0}
+/* VALUE PLAYS */
+.vp-row{display:flex;align-items:center;gap:10px;padding:.6rem .85rem;border-radius:5px;background:var(--surface2);margin-bottom:6px;flex-wrap:wrap}
+.vp-name{font-family:'Newsreader',serif;font-size:13px;font-weight:600;color:var(--text);flex:1;min-width:120px}
+.vp-stat{font-family:'JetBrains Mono',monospace;font-size:10px;padding:2px 8px;border-radius:2px;white-space:nowrap}
+.vp-edge{background:rgba(58,143,82,.2);color:#72c48a}
+.vp-model{background:rgba(212,168,67,.15);color:var(--gold)}
+.vp-market{background:var(--surface3);color:var(--text3)}
+.vp-odds{background:rgba(61,122,181,.15);color:#7aaddb}
+/* SCORES */
+.sgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:8px;margin-bottom:1rem}
+.stile{background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:.65rem .85rem}
+.stile.upcoming{border-style:dashed}
+.stbar{display:flex;justify-content:space-between;margin-bottom:5px}
+.stst{font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--text3)}
+.stt{display:flex;flex-direction:column;gap:3px}
+.str{display:flex;justify-content:space-between}
+.sta{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:var(--text)}
+.stsc{font-family:'Newsreader',serif;font-size:17px;font-weight:700;color:var(--text)}
+.stvd{height:1px;background:var(--border);margin:2px 0}
+.stf{font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--text3);margin-top:4px;line-height:1.5}
+/* LOADING */
+.loading{text-align:center;padding:4rem 2rem;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text3)}
+.spinner{width:32px;height:32px;border:2px solid var(--border2);border-top-color:var(--gold);border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 1rem}
+@keyframes spin{to{transform:rotate(360deg)}}
+.error-state{text-align:center;padding:3rem 2rem}
+.footer{background:var(--surface);border-top:1px solid var(--border);text-align:center;padding:2rem 1rem;font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--text3);letter-spacing:.5px;line-height:2;margin-top:2rem}
+</style>
+</head>
+<body>
 
-on:
-  schedule:
-    # 9:00 AM ET = 13:00 UTC (EDT) / 14:00 UTC (EST)
-    # Runs every day during MLB season (March through November)
-    - cron: '0 13 * * *'
+<div class="mast">
+  <div class="mi">
+    <div class="mt">
+      <span class="brand" id="brand-text">★ Chris's HR Value Model — vElite · 47 Rules</span>
+      <span class="dt" id="date-text">Loading...</span>
+    </div>
+    <h1>The <em>Dinger</em> Report</h1>
+    <div class="msub" id="msub-text">Loading today's picks...</div>
+    <div class="tags" id="tags-container"></div>
+  </div>
+</div>
 
-  # Allow manual trigger from GitHub Actions tab
-  workflow_dispatch:
-    inputs:
-      run_backtest:
-        description: 'Also run backtest (slow - takes ~30 min)'
-        required: false
-        default: 'false'
-      backtest_year:
-        description: 'Year to backtest (2025 or 2026)'
-        required: false
-        default: '2025'
+<nav class="nav">
+  <div class="nr">
+    <button class="nb on" onclick="sw('picks')">🏆 Best Picks</button>
+    <button class="nb" onclick="sw('pairs')">🔗 Pairings</button>
+    <button class="nb" onclick="sw('games')">⚾ All Games</button>
+    <button class="nb" onclick="sw('value')">💰 Value Plays</button>
+    <button class="nb" onclick="sw('scores')">🔴 Scores</button>
+  </div>
+</nav>
 
-jobs:
-  build-daily-report:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+<div class="page">
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+<!-- PICKS -->
+<div class="panel on" id="ppicks">
+  <div id="picks-loading" class="loading">
+    <div class="spinner"></div>
+    Pulling today's slate...
+  </div>
+  <div id="picks-content" style="display:none"></div>
+</div>
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+<!-- PAIRS -->
+<div class="panel" id="ppairs">
+  <div id="pairs-loading" class="loading"><div class="spinner"></div>Loading pairings...</div>
+  <div id="pairs-content" style="display:none"></div>
+</div>
 
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
+<!-- GAMES -->
+<div class="panel" id="pgames">
+  <div id="games-loading" class="loading"><div class="spinner"></div>Loading game cards...</div>
+  <div id="games-content" style="display:none"></div>
+</div>
 
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
+<!-- VALUE PLAYS -->
+<div class="panel" id="pvalue">
+  <div id="value-loading" class="loading"><div class="spinner"></div>Loading market edges...</div>
+  <div id="value-content" style="display:none"></div>
+</div>
 
-      - name: Run Phase 1 — Score Engine
-        run: |
-          echo "Running score_engine.py..."
-          python src/score_engine.py
-        env:
-          PYTHONPATH: ${{ github.workspace }}/src
+<!-- SCORES -->
+<div class="panel" id="pscores">
+  <div id="scores-loading" class="loading"><div class="spinner"></div>Loading scoreboard...</div>
+  <div id="scores-content" style="display:none"></div>
+</div>
 
-      - name: Run Phase 3 — Odds Engine
-        run: |
-          echo "Running odds_engine.py..."
-          python src/odds_engine.py
-        env:
-          THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
-          PYTHONPATH: ${{ github.workspace }}/src
-        # Don't fail the whole build if odds API is down
-        continue-on-error: true
+</div><!-- end page -->
 
-      - name: Run Phase 2 — Backtest (manual trigger only)
-        if: github.event.inputs.run_backtest == 'true'
-        run: |
-          echo "Running backtest for ${{ github.event.inputs.backtest_year }}..."
-          python src/backtest.py --year ${{ github.event.inputs.backtest_year }}
-        env:
-          PYTHONPATH: ${{ github.workspace }}/src
+<div class="footer" id="footer-text">
+  Chris's HR Value Model — vElite ★★★★★ · v4.7 · 47 Rules · Auto-generated daily at 9am ET
+</div>
 
-      - name: Copy output to site directory
-        run: |
-          cp output/player-data.json site/player-data.json
-          cp output/picks.json site/picks.json
-          # Copy value plays if they exist
-          if [ -f output/value_plays.json ]; then
-            cp output/value_plays.json site/value_plays.json
-          fi
-          # Copy backtest results if they exist
-          for f in output/backtest_*.json; do
-            [ -f "$f" ] && cp "$f" "site/$(basename $f)"
-          done
-          echo "Output files:"
-          ls -la site/*.json
+<script>
+// ── GLOBALS ──────────────────────────────────────────────────────────────────
+let DATA = null;
+let PICKS = null;
+let VALUE = null;
 
-      - name: Commit and push updated data
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "Dinger Report Bot"
-          git add site/*.json
-          # Only commit if there are changes
-          if git diff --staged --quiet; then
-            echo "No changes to commit."
-          else
-            git commit -m "Daily build $(date '+%Y-%m-%d %H:%M ET') — auto"
-            git push
-          fi
+// ── NAVIGATION ───────────────────────────────────────────────────────────────
+function sw(id) {
+  document.querySelectorAll('.nb').forEach(b => b.classList.remove('on'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('on'));
+  document.getElementById('p' + id).classList.add('on');
+  event.target.classList.add('on');
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
 
-      - name: Deploy to Netlify
-        uses: netlify/actions/cli@master
-        with:
-          args: deploy --dir=site --prod --message "Daily build $(date '+%Y-%m-%d')"
-        env:
-          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+// ── FETCH DATA ────────────────────────────────────────────────────────────────
+async function loadData() {
+  try {
+    const [dataRes, picksRes, valueRes] = await Promise.allSettled([
+      fetch('player-data.json?v=' + Date.now()),
+      fetch('picks.json?v=' + Date.now()),
+      fetch('value_plays.json?v=' + Date.now()),
+    ]);
 
-      - name: Report summary
-        run: |
-          echo "## Dinger Report Build Complete" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Date: $(date '+%Y-%m-%d %H:%M ET')" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ -f output/picks.json ]; then
-            echo "**Top picks generated:** $(python -c "import json; d=json.load(open('output/picks.json')); print(', '.join([p['name'] for p in d.get('best4', [])]))")" >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Site: https://dingerreport.netlify.app" >> $GITHUB_STEP_SUMMARY
+    if (dataRes.status === 'fulfilled' && dataRes.value.ok) {
+      DATA = await dataRes.value.json();
+    }
+    if (picksRes.status === 'fulfilled' && picksRes.value.ok) {
+      PICKS = await picksRes.value.json();
+    }
+    if (valueRes.status === 'fulfilled' && valueRes.value.ok) {
+      VALUE = await valueRes.value.json();
+    }
+
+    renderAll();
+  } catch (e) {
+    showError('picks', 'Failed to load data. Engine may still be running — try refreshing in a few minutes.');
+    console.error(e);
+  }
+}
+
+function showError(section, msg) {
+  const el = document.getElementById(section + '-loading');
+  if (el) el.innerHTML = `<div class="error-state" style="color:var(--text3);font-family:'JetBrains Mono',monospace;font-size:11px">${msg}</div>`;
+}
+
+// ── RENDER ALL ────────────────────────────────────────────────────────────────
+function renderAll() {
+  if (!DATA && !PICKS) {
+    showError('picks', 'No data available yet. Engine runs at 9am ET daily.');
+    return;
+  }
+
+  updateMasthead();
+  renderPicks();
+  renderPairings();
+  renderGames();
+  renderValue();
+  renderScores();
+}
+
+// ── MASTHEAD ──────────────────────────────────────────────────────────────────
+function updateMasthead() {
+  const d = DATA || PICKS;
+  if (!d) return;
+
+  const date = d.generated || d.date || 'Today';
+  const games = d.games_today || d.game_cards?.length || '—';
+  const scored = d.batters_scored || '—';
+  const version = d.model_version || 'vElite v4.7';
+  const rules = d.rules || 47;
+
+  document.getElementById('date-text').textContent =
+    `${formatDate(date)} · ${version} · ${rules} rules · Auto-generated`;
+
+  document.getElementById('msub-text').textContent =
+    `${rules} rules · ${games} games · ${scored} batters scored · Engine runs 9am ET daily`;
+
+  // Build tags from top game environments
+  const tags = document.getElementById('tags-container');
+  tags.innerHTML = '';
+  if (d.game_cards) {
+    const elite = d.game_cards.filter(g => g.game_tier === 'ELITE').slice(0, 3);
+    const high  = d.game_cards.filter(g => g.game_tier === 'HIGH').slice(0, 2);
+    [...elite, ...high].forEach(g => {
+      const cls = g.game_tier === 'ELITE' ? 'tr' : 'ta';
+      const pitcher = g.home_pitcher?.pds > g.away_pitcher?.pds
+        ? g.home_pitcher : g.away_pitcher;
+      tags.innerHTML += `<span class="tag ${cls}">${g.game_key} · ${pitcher.name || ''} PDS ${pitcher.pds || ''} · ${g.game_tier}</span>`;
+    });
+  }
+
+  document.getElementById('footer-text').textContent =
+    `Chris's HR Value Model — vElite ★★★★★ · ${version} · ${rules} Rules · Generated ${date} at 9am ET`;
+}
+
+function formatDate(str) {
+  if (!str || str === 'loading') return 'Today';
+  try {
+    const d = new Date(str + 'T12:00:00');
+    return d.toLocaleDateString('en-US', {weekday:'long', month:'long', day:'numeric', year:'numeric'});
+  } catch { return str; }
+}
+
+// ── SCORE CHIP ────────────────────────────────────────────────────────────────
+function chipClass(score) {
+  if (score >= 85) return 'ce';
+  if (score >= 70) return 'ca';
+  if (score >= 55) return 'cm';
+  return 'sx';
+}
+
+function scoreColor(score) {
+  if (score >= 85) return '#e87070';
+  if (score >= 70) return '#d4a843';
+  if (score >= 55) return '#7aaddb';
+  return '#6b6560';
+}
+
+// ── RENDER PICKS ──────────────────────────────────────────────────────────────
+function renderPicks() {
+  const el = document.getElementById('picks-content');
+  const loading = document.getElementById('picks-loading');
+
+  const picks = PICKS || DATA;
+  if (!picks) { showError('picks', 'No picks data available.'); return; }
+
+  const best4 = picks.best4 || [];
+  const power3 = picks.power3 || [];
+  const nc4 = picks.nc4 || [];
+  const lotto = picks.super_lotto || [];
+
+  if (!best4.length && !power3.length) {
+    loading.innerHTML = `<div style="padding:2rem;text-align:center;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text3)">
+      Engine has run successfully but lineup data is still loading from MLB API.<br>Check back closer to game time.
+    </div>`;
+    return;
+  }
+
+  let html = '';
+
+  // Alert
+  const topScore = best4[0]?.score || 0;
+  const topName = best4[0]?.name || '';
+  html += `<div class="al al-r"><strong>${topName} leads today's slate at ${topScore}</strong> — all picks auto-generated by the 47-rule engine from live Statcast + MLB Stats API data.</div>`;
+
+  // BEST 4
+  if (best4.length) {
+    html += `<div class="slbl">Best 4 — ${formatDate(picks.date || DATA?.generated)} · Top Statcast scores · Exclusive to this ticket</div>`;
+    html += buildTicketCard(best4, 'Best 4 · Statcast-verified · Exclusive', 'ph-b4', 'pb-pur', 'np',
+      best4.map(b => b.name).join(' · '),
+      best4.map(b => b.score).join('/') + ' · auto-scored · 47 rules applied');
+  }
+
+  // 3-MAN POWER
+  if (power3.length) {
+    html += `<div class="slbl">3-Man Power — All score 65+ · Deep lineup / non-chalk · 3 different games</div>`;
+    html += buildTicketCard(power3, '3-Man Power · Non-chalk · Deep lineup', 'ph-amb', 'pb-amb', 'na',
+      power3.map(b => b.name).join(' · '),
+      power3.map(b => b.score).join('/') + ' · 3 different games');
+  }
+
+  // 4-MAN NC
+  if (nc4.length) {
+    html += `<div class="slbl">4-Man Non-Chalk — 4 different games · All 60+ · Zero overlap with Best 4</div>`;
+    html += buildTicketCard(nc4, '4-Man Non-Chalk · Maximum game spread', 'ph-amb', 'pb-amb', 'na',
+      nc4.map(b => b.name).join(' · '),
+      nc4.map(b => b.score).join('/') + ' · 4 different games');
+  }
+
+  // SUPER LOTTO
+  if (lotto.length) {
+    html += `<div class="slbl">5-Man Super Lotto — One per tier · C Rule 6 · Massey slot</div>`;
+    html += buildTicketCard(lotto, 'Super Lotto · One per tier · Maximum spread', 'ph-grn', 'pb-grn', 'ng',
+      lotto.map(b => b.name).join(' · '),
+      'ELITE + HIGH + MED + C Rule 6 + Massey slot');
+  }
+
+  el.innerHTML = html;
+  loading.style.display = 'none';
+  el.style.display = 'block';
+}
+
+function buildTicketCard(batters, badge, phClass, pbClass, numClass, title, subtitle) {
+  let html = `<div class="pc gold"><div class="pch ${phClass}">
+    <span class="pbadge ${pbClass}">${badge}</span>
+    <div class="ptitle">${title}</div>
+    <div class="psub">${subtitle}</div>
+  </div><div class="pbody">`;
+
+  batters.forEach((b, i) => {
+    const rules = (b.rules_fired || []).slice(0, 3);
+    const game = b.game_key || `${b.batting_team || b.team} vs ${b.pitcher_name || ''}`;
+    const pitcher = b.pitcher_name ? `vs ${b.pitcher_name} · PDS ${b.pitcher_pds || ''}` : '';
+    const slot = b.slot ? `Slot ${b.slot}` : '';
+
+    html += `<div class="pick">
+      <div class="pnum ${numClass}">${i + 1}</div>
+      <div>
+        <div class="pname">${b.name}</div>
+        <div class="pgame">${[b.team, slot, b.hand ? b.hand + 'HB' : '', pitcher].filter(Boolean).join(' · ')} · ${game}</div>
+        <div class="ptgs">
+          ${b.ev ? `<span class="tg2 te">EV ${b.ev.toFixed(1)}</span>` : ''}
+          ${b.barrel_pct ? `<span class="tg2 te">Barrel% ${b.barrel_pct.toFixed(1)}%</span>` : ''}
+          ${b.hr_fb_pct ? `<span class="tg2 tam">HR/FB% ${b.hr_fb_pct.toFixed(1)}%</span>` : ''}
+          ${b.xwoba ? `<span class="tg2 tam">xwOBA ${b.xwoba.toFixed(3)}</span>` : ''}
+          ${b.fb_pct ? `<span class="tg2 tgr">FB% ${b.fb_pct.toFixed(1)}%</span>` : ''}
+        </div>
+        <div class="pwhy">${rules.join(' · ')}</div>
+      </div>
+      <div class="chip ${chipClass(b.score)}">${b.score}</div>
+    </div>`;
+  });
+
+  html += `</div></div>`;
+  return html;
+}
+
+// ── RENDER PAIRINGS ────────────────────────────────────────────────────────────
+function renderPairings() {
+  const el = document.getElementById('pairs-content');
+  const loading = document.getElementById('pairs-loading');
+
+  const picks = PICKS || DATA;
+  const pairings = picks?.pairings || picks?.tickets?.pairings || [];
+
+  if (!pairings.length) {
+    loading.innerHTML = `<div style="padding:2rem;text-align:center;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text3)">
+      Pairings build after lineups are confirmed. Check back closer to game time.
+    </div>`;
+    return;
+  }
+
+  let html = `<div class="al" style="border-color:var(--purple);background:rgba(123,94,167,.08);color:#b89fd4">
+    <strong>4 Pairings — logic-first, data-driven.</strong> Play both or neither. Each pairing has a specific stated reason.
+  </div>`;
+
+  html += `<div class="pair-grid">`;
+  pairings.forEach(p => {
+    const b1 = p.bat1 || {name: p.bat1_name, score: p.bat1_score};
+    const b2 = p.bat2 || {name: p.bat2_name, score: p.bat2_score};
+    if (!b1?.name || !b2?.name) return;
+
+    html += `<div class="pair-card">
+      <div class="pair-hdr">
+        <span class="pair-type">${p.type || 'Pairing'}</span>
+        <div class="pair-title">${b1.name} + ${b2.name}</div>
+        <div class="pair-logic">${p.logic || ''}</div>
+      </div>
+      <div class="pair-bats">
+        <div class="pair-bat">
+          <div style="flex:1"><div class="pb-name">${b1.name}</div>
+          <div class="pb-detail">${b1.team || ''} · Slot ${b1.slot || '—'} · PDS ${b1.pitcher_pds || '—'}</div></div>
+          <div class="pb-score" style="color:${scoreColor(b1.score)}">${b1.score}</div>
+        </div>
+        <div class="pair-conn">⟷ CORRELATED ⟷</div>
+        <div class="pair-bat">
+          <div style="flex:1"><div class="pb-name">${b2.name}</div>
+          <div class="pb-detail">${b2.team || ''} · Slot ${b2.slot || '—'} · PDS ${b2.pitcher_pds || '—'}</div></div>
+          <div class="pb-score" style="color:${scoreColor(b2.score)}">${b2.score}</div>
+        </div>
+      </div>
+    </div>`;
+  });
+  html += `</div>`;
+
+  el.innerHTML = html;
+  loading.style.display = 'none';
+  el.style.display = 'block';
+}
+
+// ── RENDER GAMES ───────────────────────────────────────────────────────────────
+function renderGames() {
+  const el = document.getElementById('games-content');
+  const loading = document.getElementById('games-loading');
+
+  const cards = DATA?.game_cards;
+  if (!cards?.length) {
+    loading.innerHTML = `<div style="padding:2rem;text-align:center;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text3)">
+      Game cards populate after MLB confirms today's lineups.
+    </div>`;
+    return;
+  }
+
+  let html = `<div class="al al-a"><strong>Priority order:</strong> ${
+    cards.slice(0, 5).map(g => `${g.game_key} (${g.game_tier} · PDS ${g.top_pds})`).join(' → ')
+  }</div>`;
+
+  // Group by tier
+  ['ELITE', 'HIGH', 'MED', 'LOW'].forEach(tier => {
+    const tierGames = cards.filter(g => g.game_tier === tier);
+    if (!tierGames.length) return;
+
+    html += `<div class="slbl">${tier} PDS Games</div><div class="gg">`;
+    tierGames.forEach(g => {
+      const ghClass = tier === 'ELITE' ? 'gh-e' : tier === 'HIGH' ? 'gh-h' : tier === 'MED' ? 'gh-m' : 'gh-l';
+      const pdsBadgeClass = tier === 'ELITE' ? 'pde' : tier === 'HIGH' ? 'pdh' : tier === 'MED' ? 'pdm' : 'pdl';
+      const gcClass = tier === 'ELITE' ? 'elite' : tier === 'HIGH' ? 'high' : '';
+
+      const homePitch = g.home_pitcher || {};
+      const awayPitch = g.away_pitcher || {};
+
+      // Determine which side is the ELITE PDS side
+      const elitePitcher = homePitch.pds > awayPitch.pds ? homePitch : awayPitch;
+      const eliteTeam = homePitch.pds > awayPitch.pds ? g.away_team : g.home_team;
+
+      // Top away and home batters
+      const awayTop = (g.away_batters || []).slice(0, 4);
+      const homeTop = (g.home_batters || []).slice(0, 4);
+
+      html += `<div class="gc ${gcClass}">
+        <div class="gh ${ghClass}">
+          <span class="gtitle">${tier === 'ELITE' ? '⚡ ' : ''}${g.game_key}</span>
+          <span class="pds ${pdsBadgeClass}">${elitePitcher.name || ''} PDS ${elitePitcher.pds || ''}</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid var(--border)">
+          <div style="padding:6px 10px;font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--text3);background:var(--surface2);border-right:1px solid var(--border)">
+            ${g.away_team} vs ${homePitch.pitcher_name || homePitch.name || 'TBD'} (${homePitch.pds || '—'})
+          </div>
+          <div style="padding:6px 10px;font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--text3);background:var(--surface2)">
+            ${g.home_team} vs ${awayPitch.pitcher_name || awayPitch.name || 'TBD'} (${awayPitch.pds || '—'})
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr">
+          <div class="bats-row" style="border-right:1px solid var(--border)">
+            ${awayTop.map((b, i) => batterRow(b, i)).join('')}
+          </div>
+          <div class="bats-row">
+            ${homeTop.map((b, i) => batterRow(b, i)).join('')}
+          </div>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+  });
+
+  el.innerHTML = html;
+  loading.style.display = 'none';
+  el.style.display = 'block';
+}
+
+function batterRow(b, rank) {
+  const rkClass = ['r1','r2','r3','r4','r5'][Math.min(rank, 4)];
+  const scClass = b.score >= 85 ? 'se' : b.score >= 70 ? 'sh' : b.score >= 55 ? 'sm' : 'sx';
+  return `<div class="br">
+    <div class="rk ${rkClass}">${rank + 1}</div>
+    <span class="sl slc">${b.slot || '—'}</span>
+    <span class="hnd">${b.hand || ''}</span>
+    <div class="bi">
+      <div class="bn">${b.name}</div>
+      <div class="bt">
+        ${b.barrel_pct ? `<span class="tg2 te">Brl ${b.barrel_pct.toFixed(1)}%</span>` : ''}
+        ${b.hr_fb_pct ? `<span class="tg2 tam">HR/FB ${b.hr_fb_pct.toFixed(0)}%</span>` : ''}
+      </div>
+    </div>
+    <span class="sc ${scClass}">${b.score}</span>
+  </div>`;
+}
+
+// ── RENDER VALUE PLAYS ────────────────────────────────────────────────────────
+function renderValue() {
+  const el = document.getElementById('value-content');
+  const loading = document.getElementById('value-loading');
+
+  const valuePlays = VALUE || PICKS?.value_plays || [];
+
+  if (!valuePlays.length) {
+    loading.innerHTML = `<div style="padding:2rem;text-align:center;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text3)">
+      <div style="margin-bottom:.5rem;color:var(--gold)">Odds integration coming online</div>
+      Add THE_ODDS_API_KEY to GitHub Secrets to activate Phase 3 edge detection.<br>
+      The engine will automatically compare model probability to DraftKings + FanDuel lines<br>
+      and flag plays where our model is 1.5× or more above market implied probability.
+    </div>`;
+    loading.style.display = 'block';
+    return;
+  }
+
+  let html = `<div class="al al-g"><strong>Value plays — model probability significantly above market implied probability.</strong> Edge = model% − market%. Green = our model says this batter is more likely to homer than the market believes.</div>`;
+
+  html += `<div class="slbl">Value plays · Model prob ≥ 1.5× market · Sorted by edge</div>`;
+
+  valuePlays.forEach(p => {
+    html += `<div class="vp-row">
+      <div class="vp-name">${p.name}<br>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--text3)">${p.team || ''} · Score ${p.score}</span>
+      </div>
+      <span class="vp-stat vp-model">Model ${p.model_prob?.toFixed(1)}%</span>
+      <span class="vp-stat vp-market">Market ${p.market_prob?.toFixed(1)}%</span>
+      <span class="vp-stat vp-edge">+${p.edge_pct?.toFixed(1)}% edge</span>
+      <span class="vp-stat vp-odds">${p.best_book || ''} ${p.market_odds > 0 ? '+' : ''}${p.market_odds || ''}</span>
+    </div>`;
+  });
+
+  el.innerHTML = html;
+  loading.style.display = 'none';
+  el.style.display = 'block';
+}
+
+// ── RENDER SCORES ──────────────────────────────────────────────────────────────
+function renderScores() {
+  const el = document.getElementById('scores-content');
+  const loading = document.getElementById('scores-loading');
+
+  const cards = DATA?.game_cards;
+  if (!cards?.length) {
+    loading.innerHTML = `<div style="padding:2rem;text-align:center;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text3)">
+      Scoreboard populates after games begin.
+    </div>`;
+    return;
+  }
+
+  let html = `<div style="background:var(--surface);border-radius:8px;padding:1rem 1.25rem;margin-bottom:1rem;border:1px solid var(--border)">
+    <div style="font-family:'Newsreader',serif;font-size:1.1rem;font-weight:700;color:var(--gold)">${formatDate(DATA?.generated)} — Scoreboard</div>
+    <div style="font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--text3);margin-top:3px">${cards.length} games · Engine v4.7 · 47 rules</div>
+  </div>`;
+
+  html += `<div class="sgrid">`;
+  cards.forEach(g => {
+    const topAway = (g.away_batters || [])[0];
+    const topHome = (g.home_batters || [])[0];
+    const borderStyle = g.game_tier === 'ELITE'
+      ? 'border:1.5px solid var(--red)'
+      : g.game_tier === 'HIGH'
+      ? 'border:1px solid var(--gold)'
+      : '';
+
+    html += `<div class="stile upcoming" style="${borderStyle}">
+      <div class="stbar">
+        <span class="stst">${g.game_tier}</span>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--text3)">PDS ${g.top_pds}</span>
+      </div>
+      <div class="stt">
+        <div class="str"><span class="sta">${g.away_team}</span><span class="stsc">—</span></div>
+        <div style="height:1px;background:var(--border);margin:2px 0"></div>
+        <div class="str"><span class="sta">${g.home_team}</span><span class="stsc">—</span></div>
+      </div>
+      <div class="stf">${g.away_pitcher?.name || 'TBD'} vs ${g.home_pitcher?.name || 'TBD'}</div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:8px;margin-top:3px;color:var(--gold)">
+        ${topAway ? `${topAway.name} ${topAway.score}` : ''} ${topHome ? `· ${topHome.name} ${topHome.score}` : ''}
+      </div>
+    </div>`;
+  });
+  html += `</div>`;
+
+  el.innerHTML = html;
+  loading.style.display = 'none';
+  el.style.display = 'block';
+}
+
+// ── INIT ──────────────────────────────────────────────────────────────────────
+loadData();
+</script>
+</body>
+</html>
