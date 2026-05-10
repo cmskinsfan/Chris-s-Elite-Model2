@@ -1,0 +1,1062 @@
+"""
+Chris's HR Value Model — vElite
+score_engine.py — v4.7 · 47 Rules
+
+Runs daily via GitHub Actions at 9am ET.
+Pulls live Statcast + MLB Stats API data, scores all batters,
+writes player-data.json and picks.json for the Netlify site.
+"""
+
+import requests
+import json
+import csv
+import io
+import time
+import datetime
+import os
+from typing import Optional
+
+TODAY = datetime.date.today().strftime("%Y-%m-%d")
+SEASON = datetime.date.today().year
+
+# ── PARK FACTORS (HR, +/- vs league avg %) ──────────────────────────────────
+PARK_FACTORS = {
+    "CIN": +10, "COL": +6,  "PHI": +8,  "NYY": +5,  "BOS": +4,
+    "TEX": +3,  "HOU": +2,  "ARI": +2,  "ATL": +1,  "MIL": 0,
+    "LAD": 0,   "NYM": 0,   "STL": 0,   "MIN": 0,   "DET": 0,
+    "CLE": -1,  "KC":  -1,  "TOR": -1,  "BAL": -2,  "WSH": -2,
+    "MIA": -4,  "TB":  -3,  "CWS": -2,  "OAK": -3,  "ATH": -3,
+    "SEA": -3,  "SD":  -3,  "SF":  -12, "PIT": -4,  "LAA": -2,
+    "CHC": +1,
+}
+
+# ── MLB TEAM ID MAP (MLB Stats API) ─────────────────────────────────────────
+TEAM_IDS = {
+    "ARI":110,"ATH":133,"ATL":144,"BAL":110,"BOS":111,"CHC":112,
+    "CWS":145,"CIN":113,"CLE":114,"COL":115,"DET":116,"HOU":117,
+    "KC":118,"LAA":108,"LAD":119,"MIA":146,"MIL":158,"MIN":142,
+    "NYM":121,"NYY":147,"OAK":133,"PHI":143,"PIT":134,"SD":135,
+    "SF":137,"SEA":136,"STL":138,"TB":139,"TEX":140,"TOR":141,"WSH":120,
+}
+TEAM_ABBR = {v: k for k, v in TEAM_IDS.items()}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATA FETCHING
+# ─────────────────────────────────────────────────────────────────────────────
+
+def fetch_savant_batter_data() -> dict:
+    """
+    Pull batter Statcast leaderboard from Baseball Savant.
+    Returns dict keyed by player_id with all 47-rule batter metrics.
+    """
+    url = (
+        "https://baseballsavant.mlb.com/leaderboard/custom"
+        "?year={year}&type=batter&filter=&sort=4&sortDir=desc"
+        "&min=20&selections=xba,xslg,xwoba,xobp,xiso,exit_velocity_avg,"
+        "launch_angle_avg,sweet_spot_percent,barrel_batted_rate,"
+        "hard_hit_percent,avg_best_speed,whiff_percent,k_percent,bb_percent,"
+        "pull_percent,straightaway_percent,oppo_percent,groundball_percent,"
+        "flyball_percent,line_drive_percent,hr_flyball_percent,sprint_speed,"
+        "solidcontact_percent,flare_percent,barrel_percent,"
+        "bat_speed,swing_length&csv=true"
+    ).format(year=SEASON)
+
+    print(f"  Fetching batter Statcast data from Baseball Savant...")
+    try:
+        r = requests.get(url, timeout=30)
+        r.raise_for_status()
+        reader = csv.DictReader(io.StringIO(r.text))
+        batters = {}
+        for row in reader:
+            try:
+                pid = int(row.get("player_id", 0) or row.get("mlbam_id", 0) or 0)
+                if not pid:
+                    continue
+                batters[pid] = {
+                    "name": row.get("player_name", "Unknown"),
+                    "team": row.get("team_name_abbrev", ""),
+                    "pa": safe_float(row.get("pa", 0)),
+                    "ev": safe_float(row.get("exit_velocity_avg")),
+                    "barrel_pct": safe_float(row.get("barrel_batted_rate")),
+                    "hh_pct": safe_float(row.get("hard_hit_percent")),
+                    "sweet_spot_pct": safe_float(row.get("sweet_spot_percent")),
+                    "xwoba": safe_float(row.get("xwoba")),
+                    "xslg": safe_float(row.get("xslg")),
+                    "xiso": safe_float(row.get("xiso")),
+                    "whiff_pct": safe_float(row.get("whiff_percent")),
+                    "k_pct": safe_float(row.get("k_percent")),
+                    "bb_pct": safe_float(row.get("bb_percent")),
+                    "pull_pct": safe_float(row.get("pull_percent")),
+                    "fb_pct": safe_float(row.get("flyball_percent")),
+                    "gb_pct": safe_float(row.get("groundball_percent")),
+                    "ld_pct": safe_float(row.get("line_drive_percent")),
+                    "hr_fb_pct": safe_float(row.get("hr_flyball_percent")),
+                    "solidcontact_pct": safe_float(row.get("solidcontact_percent")),
+                    "bat_speed": safe_float(row.get("bat_speed")),
+                }
+            except Exception:
+                continue
+        print(f"  Loaded {len(batters)} batters from Savant.")
+        return batters
+    except Exception as e:
+        print(f"  WARNING: Savant batter fetch failed: {e}")
+        return {}
+
+
+def fetch_savant_pitcher_data() -> dict:
+    """
+    Pull pitcher Statcast leaderboard from Baseball Savant.
+    Returns dict keyed by player_id with all pitcher metrics for Rules 42-47.
+    """
+    url = (
+        "https://baseballsavant.mlb.com/leaderboard/custom"
+        "?year={year}&type=pitcher&filter=&sort=4&sortDir=desc"
+        "&min=10&selections=xba,xslg,xwoba,exit_velocity_avg,launch_angle_avg,"
+        "barrel_batted_rate,hard_hit_percent,whiff_percent,k_percent,bb_percent,"
+        "groundball_percent,flyball_percent,hr_flyball_percent,"
+        "sweet_spot_percent,solidcontact_percent&csv=true"
+    ).format(year=SEASON)
+
+    print(f"  Fetching pitcher Statcast data from Baseball Savant...")
+    try:
+        r = requests.get(url, timeout=30)
+        r.raise_for_status()
+        reader = csv.DictReader(io.StringIO(r.text))
+        pitchers = {}
+        for row in reader:
+            try:
+                pid = int(row.get("player_id", 0) or row.get("mlbam_id", 0) or 0)
+                if not pid:
+                    continue
+                pitchers[pid] = {
+                    "name": row.get("player_name", "Unknown"),
+                    "team": row.get("team_name_abbrev", ""),
+                    "ip": safe_float(row.get("ip", 0)),
+                    "barrel_pct_allowed": safe_float(row.get("barrel_batted_rate")),
+                    "hh_pct_allowed": safe_float(row.get("hard_hit_percent")),
+                    "ev_allowed": safe_float(row.get("exit_velocity_avg")),
+                    "whiff_pct": safe_float(row.get("whiff_percent")),
+                    "k_pct": safe_float(row.get("k_percent")),
+                    "bb_pct": safe_float(row.get("bb_percent")),
+                    "fb_pct_allowed": safe_float(row.get("flyball_percent")),
+                    "gb_pct_allowed": safe_float(row.get("groundball_percent")),
+                    "hr_fb_pct_allowed": safe_float(row.get("hr_flyball_percent")),
+                    "sweet_spot_pct_allowed": safe_float(row.get("sweet_spot_percent")),
+                }
+            except Exception:
+                continue
+        print(f"  Loaded {len(pitchers)} pitchers from Savant.")
+        return pitchers
+    except Exception as e:
+        print(f"  WARNING: Savant pitcher fetch failed: {e}")
+        return {}
+
+
+def fetch_savant_pitcher_arsenal(pitcher_id: int) -> dict:
+    """
+    Pull pitch arsenal data for a specific pitcher — Rule 36 pitch-type damage matrix.
+    Returns dict of pitch types with velocity, usage%, and metrics.
+    """
+    url = (
+        f"https://baseballsavant.mlb.com/player-services/statcast-pitching"
+        f"?playerId={pitcher_id}&position=1&teamId=&gameDate=&season={SEASON}"
+        f"&type=details&tab=pitches"
+    )
+    try:
+        r = requests.get(url, timeout=15)
+        if r.status_code == 200:
+            data = r.json()
+            arsenal = {}
+            for pitch in data.get("pitches", []):
+                pt = pitch.get("pitch_type_code", "")
+                arsenal[pt] = {
+                    "name": pitch.get("pitch_type_name", pt),
+                    "velocity": safe_float(pitch.get("avg_speed")),
+                    "usage_pct": safe_float(pitch.get("pitch_usage")),
+                    "whiff_pct": safe_float(pitch.get("whiff_pct")),
+                    "xslg_allowed": safe_float(pitch.get("xslg")),
+                    "barrel_pct": safe_float(pitch.get("barrel_batted_rate")),
+                }
+            return arsenal
+    except Exception:
+        pass
+    return {}
+
+
+def fetch_todays_games() -> list:
+    """
+    Pull today's schedule from MLB Stats API.
+    Returns list of game dicts with confirmed starters.
+    """
+    url = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={TODAY}&hydrate=probablePitcher,lineups"
+    print(f"  Fetching today's schedule from MLB Stats API...")
+    try:
+        r = requests.get(url, timeout=20)
+        r.raise_for_status()
+        data = r.json()
+        games = []
+        for date in data.get("dates", []):
+            for game in date.get("games", []):
+                if game.get("status", {}).get("abstractGameCode") == "F":
+                    continue  # Skip completed games
+                away = game.get("teams", {}).get("away", {})
+                home = game.get("teams", {}).get("home", {})
+                away_pitcher = away.get("probablePitcher", {})
+                home_pitcher = home.get("probablePitcher", {})
+                games.append({
+                    "game_pk": game.get("gamePk"),
+                    "time": game.get("gameDate", ""),
+                    "away_team": away.get("team", {}).get("abbreviation", ""),
+                    "home_team": home.get("team", {}).get("abbreviation", ""),
+                    "away_pitcher_id": away_pitcher.get("id"),
+                    "away_pitcher_name": away_pitcher.get("fullName", "TBD"),
+                    "home_pitcher_id": home_pitcher.get("id"),
+                    "home_pitcher_name": home_pitcher.get("fullName", "TBD"),
+                    "venue": game.get("venue", {}).get("name", ""),
+                })
+        print(f"  Found {len(games)} games today.")
+        return games
+    except Exception as e:
+        print(f"  WARNING: Schedule fetch failed: {e}")
+        return []
+
+
+def fetch_lineup(game_pk: int, home: bool) -> list:
+    """
+    Pull confirmed lineup for a specific game from MLB Stats API.
+    Returns list of {player_id, name, slot, hand} dicts.
+    """
+    url = f"https://statsapi.mlb.com/api/v1.1/game/{game_pk}/feed/live"
+    try:
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        side = "home" if home else "away"
+        batters = data.get("liveData", {}).get("boxscore", {}).get("teams", {}).get(side, {}).get("battingOrder", [])
+        players = data.get("liveData", {}).get("boxscore", {}).get("teams", {}).get(side, {}).get("players", {})
+        lineup = []
+        for i, pid in enumerate(batters):
+            key = f"ID{pid}"
+            player = players.get(key, {})
+            info = player.get("person", {})
+            bat_side = player.get("batSide", {}).get("code", "R")
+            lineup.append({
+                "player_id": pid,
+                "name": info.get("fullName", "Unknown"),
+                "slot": i + 1,
+                "hand": bat_side,
+            })
+        return lineup
+    except Exception:
+        return []
+
+
+def fetch_il_transactions() -> set:
+    """
+    Pull today's IL transactions from MLB Stats API.
+    Returns set of player_ids on IL (Rule 27).
+    """
+    url = f"https://statsapi.mlb.com/api/v1/transactions?startDate={TODAY}&endDate={TODAY}&sportId=1"
+    il_players = set()
+    try:
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        for t in data.get("transactions", []):
+            if "injured list" in t.get("description", "").lower():
+                pid = t.get("player", {}).get("id")
+                if pid:
+                    il_players.add(pid)
+        return il_players
+    except Exception:
+        return set()
+
+
+def fetch_pitcher_stats_season(pitcher_id: int) -> dict:
+    """
+    Pull season pitching stats for a specific pitcher.
+    Returns dict with ERA, HR/9, K/9, BB/9 etc.
+    """
+    url = f"https://statsapi.mlb.com/api/v1/people/{pitcher_id}/stats?stats=season&season={SEASON}&group=pitching"
+    try:
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        stats = data.get("stats", [{}])[0].get("splits", [{}])[0].get("stat", {})
+        ip = safe_float(stats.get("inningsPitched", 0))
+        hr = safe_float(stats.get("homeRuns", 0))
+        return {
+            "era": safe_float(stats.get("era")),
+            "xera": None,
+            "k9": safe_float(stats.get("strikeoutsPer9Inn")),
+            "bb9": safe_float(stats.get("walksPer9Inn")),
+            "hr9": (hr / ip * 9) if ip > 0 else None,
+            "whip": safe_float(stats.get("whip")),
+            "ip": ip,
+            "games": safe_float(stats.get("gamesPitched", 0)),
+            "k_pct": None,
+            "bb_pct": None,
+        }
+    except Exception:
+        return {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PITCHER PDS CALCULATION (Rules 42-47 + existing rules)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def calculate_pitcher_pds(
+    pitcher_id: Optional[int],
+    pitcher_name: str,
+    season_stats: dict,
+    savant_data: dict,
+) -> dict:
+    """
+    Calculate Pitcher Danger Score (PDS) for a starter.
+    Higher PDS = more dangerous for opposing batters = more HR opportunity.
+    Scale: 0-100. ELITE ≥85, HIGH 70-84, MED 55-69, LOW <55.
+    """
+    if not pitcher_id:
+        return {"pds": 55, "tier": "MED", "grade": "TBD — starter unconfirmed", "rules_fired": []}
+
+    sd = savant_data.get(pitcher_id, {})
+    ss = season_stats
+
+    score = 50  # Base score
+    rules_fired = []
+    grade_notes = []
+
+    k9 = ss.get("k9") or 0
+    bb9 = ss.get("bb9") or 0
+    hr9 = ss.get("hr9") or 0
+    ip = ss.get("ip") or 0
+
+    # ── RULE 5/K% — K/9 is the backbone ──────────────────────────────────────
+    if k9 > 0:
+        if k9 >= 10.0:
+            score -= 20; rules_fired.append("R5: K/9 ≥10 = −20 (elite suppressor)")
+        elif k9 >= 8.5:
+            score -= 14; rules_fired.append("R5: K/9 ≥8.5 = −14")
+        elif k9 >= 7.0:
+            score -= 8;  rules_fired.append("R5: K/9 ≥7.0 = −8")
+        elif k9 >= 5.5:
+            score += 0;  rules_fired.append(f"R5: K/9 {k9:.1f} = neutral")
+        elif k9 <= 4.0:
+            score += 18; rules_fired.append(f"R5: K/9 ≤4.0 = +18 (no swing-and-miss)")
+        elif k9 <= 5.0:
+            score += 10; rules_fired.append(f"R5: K/9 ≤5.0 = +10")
+        grade_notes.append(f"K/9 {k9:.1f}")
+
+    # ── RULE 42 — HR/9 Allowed ────────────────────────────────────────────────
+    if hr9 and hr9 > 0:
+        if hr9 >= 2.2:
+            score += 10; rules_fired.append(f"R42: HR/9 {hr9:.2f} ≥2.2 = +10")
+        elif hr9 >= 1.8:
+            score += 7;  rules_fired.append(f"R42: HR/9 {hr9:.2f} ≥1.8 = +7")
+        elif hr9 >= 1.4:
+            score += 3;  rules_fired.append(f"R42: HR/9 {hr9:.2f} ≥1.4 = +3")
+        elif hr9 <= 0.7:
+            score -= 5;  rules_fired.append(f"R42: HR/9 {hr9:.2f} ≤0.7 = −5")
+        grade_notes.append(f"HR/9 {hr9:.2f}")
+
+    # ── RULE 43 — HR/FB% Allowed ──────────────────────────────────────────────
+    hr_fb = sd.get("hr_fb_pct_allowed")
+    if hr_fb is not None:
+        if hr_fb >= 22:
+            score += 10; rules_fired.append(f"R43: HR/FB% {hr_fb:.1f}% ≥22 = +10")
+        elif hr_fb >= 18:
+            score += 8;  rules_fired.append(f"R43: HR/FB% {hr_fb:.1f}% ≥18 = +8")
+        elif hr_fb >= 15:
+            score += 4;  rules_fired.append(f"R43: HR/FB% {hr_fb:.1f}% ≥15 = +4")
+        elif hr_fb <= 8:
+            score -= 6;  rules_fired.append(f"R43: HR/FB% {hr_fb:.1f}% ≤8 = −6")
+        grade_notes.append(f"HR/FB% {hr_fb:.1f}%")
+
+    # ── RULE 44 — FB%/GB% Allowed ────────────────────────────────────────────
+    fb_allowed = sd.get("fb_pct_allowed")
+    gb_allowed = sd.get("gb_pct_allowed")
+    if fb_allowed is not None:
+        if fb_allowed >= 50:
+            score += 7; rules_fired.append(f"R44: FB% {fb_allowed:.1f}% ≥50 = +7")
+        elif fb_allowed >= 45:
+            score += 5; rules_fired.append(f"R44: FB% {fb_allowed:.1f}% ≥45 = +5")
+        elif fb_allowed <= 35:
+            score -= 4; rules_fired.append(f"R44: FB% {fb_allowed:.1f}% ≤35 = −4 (sinker/GB arm)")
+        grade_notes.append(f"FB% {fb_allowed:.1f}%")
+    if gb_allowed is not None and gb_allowed >= 52:
+        score -= 5; rules_fired.append(f"R44: GB% {gb_allowed:.1f}% ≥52 = −5 (elite GB suppressor)")
+
+    # ── RULE 46 — BB/9 as proxy for 1stPS% ───────────────────────────────────
+    if bb9 > 0:
+        if bb9 >= 5.0:
+            score += 8; rules_fired.append(f"R46: BB/9 {bb9:.1f} ≥5.0 = +8 (chronic walks = 1stPS% low)")
+        elif bb9 >= 4.0:
+            score += 5; rules_fired.append(f"R46: BB/9 {bb9:.1f} ≥4.0 = +5")
+        elif bb9 >= 3.0:
+            score += 2; rules_fired.append(f"R46: BB/9 {bb9:.1f} ≥3.0 = +2")
+        elif bb9 <= 1.8:
+            score -= 4; rules_fired.append(f"R46: BB/9 {bb9:.1f} ≤1.8 = −4 (elite command)")
+        grade_notes.append(f"BB/9 {bb9:.1f}")
+
+    # ── RULE 26 extended — Barrel%/HH% Allowed (starters) ───────────────────
+    barrel_allowed = sd.get("barrel_pct_allowed")
+    if barrel_allowed is not None:
+        if barrel_allowed >= 13:
+            score += 9; rules_fired.append(f"R26ext: Barrel% allowed {barrel_allowed:.1f}% ≥13 = +9")
+        elif barrel_allowed >= 10:
+            score += 6; rules_fired.append(f"R26ext: Barrel% allowed {barrel_allowed:.1f}% ≥10 = +6")
+        elif barrel_allowed <= 5:
+            score -= 5; rules_fired.append(f"R26ext: Barrel% allowed {barrel_allowed:.1f}% ≤5 = −5")
+
+    hh_allowed = sd.get("hh_pct_allowed")
+    if hh_allowed is not None:
+        if hh_allowed >= 42:
+            score += 4; rules_fired.append(f"R26ext: HH% allowed {hh_allowed:.1f}% ≥42 = +4")
+        elif hh_allowed <= 30:
+            score -= 3; rules_fired.append(f"R26ext: HH% allowed {hh_allowed:.1f}% ≤30 = −3")
+
+    # ── RULE 47 — Whiff%/SwStr% (pitch deception) ────────────────────────────
+    whiff = sd.get("whiff_pct")
+    if whiff is not None:
+        if whiff >= 32:
+            score -= 6; rules_fired.append(f"R47: Whiff% {whiff:.1f}% ≥32 = −6 (elite miss rate)")
+        elif whiff >= 26:
+            score -= 3; rules_fired.append(f"R47: Whiff% {whiff:.1f}% ≥26 = −3")
+        elif whiff <= 18:
+            score += 6; rules_fired.append(f"R47: Whiff% {whiff:.1f}% ≤18 = +6 (no swing-and-miss)")
+        elif whiff <= 22:
+            score += 3; rules_fired.append(f"R47: Whiff% {whiff:.1f}% ≤22 = +3")
+
+    # ── RULE 7 — Small sample cap ─────────────────────────────────────────────
+    if ip < 20:
+        # Debut/IL return — Rule 27 uncertainty premium
+        score = min(score + 8, 78)
+        rules_fired.append(f"R7/R27: IP {ip:.1f} <20 — small sample · uncertainty premium")
+        grade_notes.append(f"⚠️ {ip:.1f} IP only")
+
+    # Clamp 0-100
+    score = max(0, min(100, score))
+
+    # Tier
+    if score >= 85:
+        tier = "ELITE"
+    elif score >= 70:
+        tier = "HIGH"
+    elif score >= 55:
+        tier = "MED"
+    else:
+        tier = "LOW"
+
+    grade = f"{pitcher_name} · {' · '.join(grade_notes[:3])}" if grade_notes else pitcher_name
+
+    return {
+        "pitcher_id": pitcher_id,
+        "pitcher_name": pitcher_name,
+        "pds": round(score),
+        "tier": tier,
+        "grade": grade,
+        "rules_fired": rules_fired,
+        "k9": k9,
+        "hr9": hr9,
+        "bb9": bb9,
+        "ip": ip,
+        "fb_pct_allowed": fb_allowed,
+        "hr_fb_pct_allowed": hr_fb,
+        "barrel_pct_allowed": barrel_allowed,
+        "whiff_pct": whiff,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BATTER SCORING (all 47 batter-side rules)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def score_batter(
+    batter: dict,
+    pitcher_pds: dict,
+    slot: int,
+    hand: str,
+    pitcher_hand: str,
+    park: str,
+    il_ids: set,
+) -> dict:
+    """
+    Apply all 47 rules to a batter in a specific matchup.
+    Returns scored batter dict.
+    """
+    sd = batter  # Statcast data
+    rules_fired = []
+    score = 0
+
+    pds = pitcher_pds.get("pds", 55)
+    tier = pitcher_pds.get("tier", "MED")
+
+    # ── PDS BASE ──────────────────────────────────────────────────────────────
+    pds_mod = pds_to_modifier(pds)
+    score += pds_mod
+    rules_fired.append(f"PDS {pds} ({tier}) = +{pds_mod}")
+
+    # ── RULE 9 — Mash Index (EV + xwOBA + HH%) ───────────────────────────────
+    ev = sd.get("ev") or 0
+    xwoba = sd.get("xwoba") or 0
+    hh = sd.get("hh_pct") or 0
+    xiso = sd.get("xiso") or 0
+
+    mash = 0
+    if ev >= 93:   mash += 8
+    elif ev >= 91: mash += 5
+    elif ev >= 89: mash += 2
+    elif ev <= 86: mash -= 3
+
+    if xwoba >= 0.400: mash += 8
+    elif xwoba >= 0.370: mash += 5
+    elif xwoba >= 0.340: mash += 2
+    elif xwoba <= 0.290: mash -= 4
+
+    if hh >= 50: mash += 4
+    elif hh >= 42: mash += 2
+    elif hh <= 30: mash -= 3
+
+    # ISO modifier (Rule — explicit ISO add)
+    if xiso >= 0.280: mash += 5
+    elif xiso >= 0.220: mash += 3
+
+    score += mash
+    if mash != 0:
+        rules_fired.append(f"R9 Mash: EV {ev:.1f} · xwOBA {xwoba:.3f} · HH {hh:.1f}% = {mash:+d}")
+
+    # ── RULE 29 — EV Floor ────────────────────────────────────────────────────
+    if ev >= 97 and score < 62:
+        score = 62
+        rules_fired.append(f"R29: EV {ev:.1f} ≥97 mph → floor 62")
+    elif ev >= 95 and score < 58:
+        score = 58
+        rules_fired.append(f"R29: EV {ev:.1f} ≥95 mph → floor 58")
+
+    # ── RULE 29b — Barrel% Floor ─────────────────────────────────────────────
+    barrel = sd.get("barrel_pct") or 0
+    barrel_bonus = 0
+    if barrel >= 22:
+        barrel_bonus = 9
+        if score < 72: score = 72
+        rules_fired.append(f"R29b: Barrel% {barrel:.1f}% ≥22 → floor 72 +{barrel_bonus}")
+    elif barrel >= 18:
+        barrel_bonus = 6
+        if score < 65: score = 65
+        rules_fired.append(f"R29b: Barrel% {barrel:.1f}% ≥18 → floor 65 +{barrel_bonus}")
+    elif barrel >= 15:
+        barrel_bonus = 4
+        if score < 62: score = 62
+        rules_fired.append(f"R29b: Barrel% {barrel:.1f}% ≥15 → floor 62 +{barrel_bonus}")
+    elif barrel >= 10:
+        barrel_bonus = 2
+        rules_fired.append(f"R29b: Barrel% {barrel:.1f}% ≥10 = +2")
+    score += barrel_bonus
+
+    # ── RULE 37 — PullBrl% (Pull-side barrel rate) ───────────────────────────
+    # Approximated from pull_pct × barrel_pct (direct PullBrl% not in CSV)
+    pull = sd.get("pull_pct") or 0
+    pull_brl_approx = (pull / 100) * barrel
+    if pull_brl_approx >= 12:
+        score += 8; rules_fired.append(f"R37: PullBrl% ~{pull_brl_approx:.1f} ≥12 = +8")
+    elif pull_brl_approx >= 8:
+        score += 5; rules_fired.append(f"R37: PullBrl% ~{pull_brl_approx:.1f} ≥8 = +5")
+    elif pull_brl_approx >= 5:
+        score += 3; rules_fired.append(f"R37: PullBrl% ~{pull_brl_approx:.1f} ≥5 = +3")
+
+    # ── RULE 38 — HR/FB% ─────────────────────────────────────────────────────
+    hr_fb = sd.get("hr_fb_pct") or 0
+    if hr_fb >= 32:
+        score += 9; rules_fired.append(f"R38: HR/FB% {hr_fb:.1f}% ≥32 = +9")
+    elif hr_fb >= 28:
+        score += 7; rules_fired.append(f"R38: HR/FB% {hr_fb:.1f}% ≥28 = +7")
+    elif hr_fb >= 22:
+        score += 4; rules_fired.append(f"R38: HR/FB% {hr_fb:.1f}% ≥22 = +4")
+    elif hr_fb >= 16:
+        score += 2; rules_fired.append(f"R38: HR/FB% {hr_fb:.1f}% ≥16 = +2")
+
+    # ── RULE 39 — FB% (batter) ────────────────────────────────────────────────
+    fb = sd.get("fb_pct") or 0
+    gb = sd.get("gb_pct") or 0
+    if fb >= 44:
+        score += 4; rules_fired.append(f"R39: FB% {fb:.1f}% ≥44 = +4")
+    elif fb >= 38:
+        score += 2; rules_fired.append(f"R39: FB% {fb:.1f}% ≥38 = +2")
+    if gb >= 52:
+        score -= 3; rules_fired.append(f"R39: GB% {gb:.1f}% ≥52 = −3 (ceiling suppressor)")
+
+    # ── RULE 41 — PullAir% (approximated) ────────────────────────────────────
+    pull_air_approx = (pull / 100) * fb
+    if pull_air_approx >= 25:
+        score += 6; rules_fired.append(f"R41: PullAir% ~{pull_air_approx:.1f}% ≥25 = +6")
+    elif pull_air_approx >= 18:
+        score += 4; rules_fired.append(f"R41: PullAir% ~{pull_air_approx:.1f}% ≥18 = +4")
+
+    # ── RULE 8 — Sweet Spot% ──────────────────────────────────────────────────
+    ss_pct = sd.get("sweet_spot_pct") or 0
+    if ss_pct >= 40:
+        score += 3; rules_fired.append(f"R8: Sweet Spot% {ss_pct:.1f}% ≥40 = +3")
+    elif ss_pct >= 34:
+        score += 1
+
+    # ── RULE 22b — Bat Speed ─────────────────────────────────────────────────
+    bat_spd = sd.get("bat_speed") or 0
+    if bat_spd >= 76:
+        score += 3; rules_fired.append(f"R22b: Bat speed {bat_spd:.1f} mph top tier = +3")
+    elif bat_spd >= 73:
+        score += 1
+
+    # ── RULE 4/22 — K%/Whiff% (batter side) ──────────────────────────────────
+    k_pct = sd.get("k_pct") or 0
+    whiff = sd.get("whiff_pct") or 0
+    if k_pct >= 28:
+        score -= 3; rules_fired.append(f"R4: Batter K% {k_pct:.1f}% ≥28 = −3")
+    elif k_pct <= 14:
+        score += 2; rules_fired.append(f"R4: Batter K% {k_pct:.1f}% ≤14 = +2 (contact quality)")
+    if whiff >= 32:
+        score -= 2; rules_fired.append(f"R4: Whiff% {whiff:.1f}% ≥32 = −2")
+
+    # ── RULE 6 — C Rule 6 (catchers) ─────────────────────────────────────────
+    # Applied separately in lineup builder — not here
+
+    # ── RULE 10 — Hand Split (platoon) ───────────────────────────────────────
+    platoon_bonus = 0
+    if hand == "L" and pitcher_hand == "R":
+        platoon_bonus = 3
+    elif hand == "R" and pitcher_hand == "L":
+        platoon_bonus = 2
+    elif hand == "S":  # Switch hitter gets the advantage
+        platoon_bonus = 2
+    score += platoon_bonus
+    if platoon_bonus:
+        rules_fired.append(f"R10: {hand}HB vs {pitcher_hand}HP platoon = +{platoon_bonus}")
+
+    # ── RULE 33 — Switch hitter slot 2 ───────────────────────────────────────
+    if hand == "S" and slot == 2 and pds >= 55:
+        score += 3; rules_fired.append("R33: Switch hitter slot 2 in MED+ PDS = +3")
+
+    # ── RULE 24 — Slot Hot Spot ───────────────────────────────────────────────
+    slot_mod = slot_modifier(slot, tier)
+    score += slot_mod
+    if slot_mod != 0:
+        rules_fired.append(f"Slot {slot} in {tier} PDS = {slot_mod:+d}")
+
+    # ── RULE 6 — Park Factor ─────────────────────────────────────────────────
+    park_mod = PARK_FACTORS.get(park, 0)
+    if park_mod != 0:
+        score += int(park_mod * 0.4)  # Scale park factor into score
+        rules_fired.append(f"Park {park}: {park_mod:+d}% HR → {int(park_mod * 0.4):+d}")
+
+    # ── RULE 15 — Outlier suppression ────────────────────────────────────────
+    if ev <= 86 and barrel <= 6 and xwoba <= 0.290:
+        score = min(score, 52)
+        rules_fired.append("R15: Outlier suppression — weak Statcast profile")
+
+    # Clamp
+    score = max(0, min(100, score))
+
+    # Tier
+    if score >= 85:   btier = "ELITE"
+    elif score >= 70: btier = "HIGH"
+    elif score >= 55: btier = "MED"
+    else:             btier = "LOW"
+
+    return {
+        "player_id": batter.get("player_id"),
+        "name": batter.get("name", "Unknown"),
+        "team": batter.get("team", ""),
+        "slot": slot,
+        "hand": hand,
+        "score": round(score),
+        "tier": btier,
+        "ev": ev,
+        "barrel_pct": barrel,
+        "xwoba": xwoba,
+        "hh_pct": hh,
+        "hr_fb_pct": hr_fb,
+        "fb_pct": fb,
+        "pull_pct": pull,
+        "bat_speed": bat_spd,
+        "rules_fired": rules_fired[:6],  # Top 6 for card display
+    }
+
+
+def pds_to_modifier(pds: int) -> int:
+    """Convert PDS score to base batter score modifier."""
+    if pds >= 88: return 28
+    elif pds >= 82: return 22
+    elif pds >= 75: return 16
+    elif pds >= 68: return 10
+    elif pds >= 60: return 5
+    elif pds >= 52: return 0
+    elif pds >= 40: return -6
+    else: return -14
+
+
+def slot_modifier(slot: int, tier: str) -> int:
+    """Slot weight modifier — Rule 32 deep lineup grading."""
+    if tier in ("ELITE", "HIGH"):
+        # In ELITE/HIGH games every slot is graded — Massey slot
+        bonuses = {1: -2, 2: 2, 3: 3, 4: 2, 5: 0, 6: 2, 7: 0, 8: -1, 9: -1}
+    else:
+        bonuses = {1: -3, 2: 2, 3: 3, 4: 2, 5: 0, 6: 1, 7: -1, 8: -2, 9: -3}
+    return bonuses.get(slot, 0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TICKET CONSTRUCTION (new structure)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_tickets(all_scored_batters: list, games: list) -> dict:
+    """
+    Build all 5 ticket types from scored batters.
+    Enforces: no overlap between Best 4 and other tickets,
+    4-Man NC must be 4 different games, etc.
+    """
+    # Sort by score desc
+    sorted_batters = sorted(all_scored_batters, key=lambda x: x["score"], reverse=True)
+
+    # ── BEST 4 — top 4, any game, can be chalk ───────────────────────────────
+    best4 = sorted_batters[:4]
+    best4_names = {b["name"] for b in best4}
+
+    remaining = [b for b in sorted_batters if b["name"] not in best4_names]
+
+    # ── 3-MAN POWER — all under 3% chalk, score 65+, 3 different games ───────
+    # We don't have ownership data yet — proxy: slot 6-9, catchers, lesser-known names
+    # TODO Phase 3: integrate actual ownership from DK/FD
+    power3_candidates = [b for b in remaining if b["score"] >= 65 and b.get("slot", 1) >= 5]
+    power3_games = set()
+    power3 = []
+    for b in power3_candidates:
+        game_key = b.get("game_key", "")
+        if game_key not in power3_games:
+            power3.append(b)
+            power3_games.add(game_key)
+        if len(power3) == 3:
+            break
+
+    # ── 4-MAN NON-CHALK — 4 different games, score 60+, not in Best 4 ────────
+    nc4_games = set()
+    nc4 = []
+    nc4_names = best4_names.copy()
+    for b in remaining:
+        if b["score"] < 60:
+            continue
+        game_key = b.get("game_key", "")
+        if game_key not in nc4_games and b["name"] not in nc4_names:
+            nc4.append(b)
+            nc4_games.add(game_key)
+            nc4_names.add(b["name"])
+        if len(nc4) == 4:
+            break
+
+    # ── SUPER LOTTO — one per tier + C Rule 6 + Massey slot ─────────────────
+    lotto = []
+    used_names = best4_names.copy()
+    tiers_needed = ["ELITE", "HIGH", "MED"]
+    for tier in tiers_needed:
+        for b in remaining:
+            if b["name"] not in used_names and b["tier"] == tier:
+                lotto.append(b)
+                used_names.add(b["name"])
+                break
+
+    # C Rule 6 structural slot
+    for b in remaining:
+        if b["name"] not in used_names and b.get("position") == "C":
+            lotto.append(b)
+            used_names.add(b["name"])
+            break
+
+    # Massey slot (slot 7-9 in ELITE/HIGH game)
+    for b in remaining:
+        if (b["name"] not in used_names
+                and b.get("slot", 1) >= 7
+                and b.get("pds_tier") in ("ELITE", "HIGH")):
+            lotto.append(b)
+            used_names.add(b["name"])
+            break
+
+    # ── 4 PAIRINGS ────────────────────────────────────────────────────────────
+    pairings = build_pairings(all_scored_batters, games)
+
+    return {
+        "best4": best4,
+        "power3": power3,
+        "nc4": nc4,
+        "super_lotto": lotto[:5],
+        "pairings": pairings,
+    }
+
+
+def build_pairings(batters: list, games: list) -> list:
+    """Build 4 logic-typed pairings."""
+    sorted_b = sorted(batters, key=lambda x: x["score"], reverse=True)
+    pairings = []
+
+    # Type 1: Environment Correlation — same ELITE game, opposite ends of lineup
+    for game in games:
+        gk = f"{game['away_team']}@{game['home_team']}"
+        game_batters = [b for b in sorted_b if b.get("game_key") == gk]
+        if not game_batters:
+            continue
+        top = game_batters[0]
+        # Find slot 7-9 bat from same game
+        deep = next((b for b in game_batters if b.get("slot", 1) >= 7
+                     and b["name"] != top["name"]), None)
+        if top and deep and top.get("pds_tier") in ("ELITE", "HIGH"):
+            pairings.append({
+                "type": "Type 1 — Environment Correlation",
+                "logic": "Same ELITE/HIGH game · star bat + deep lineup bat · correlated upside",
+                "bat1": top,
+                "bat2": deep,
+            })
+            break
+
+    # Type 2: Regression Bomb + Punisher — same game, top bat + slot 7-9 non-chalk
+    for game in games:
+        gk = f"{game['away_team']}@{game['home_team']}"
+        game_batters = [b for b in sorted_b if b.get("game_key") == gk]
+        top = game_batters[0] if game_batters else None
+        deep = next((b for b in game_batters if b.get("slot", 1) >= 6
+                     and b["name"] != (top["name"] if top else "")
+                     and b not in [p.get("bat1") for p in pairings]
+                     and b not in [p.get("bat2") for p in pairings]), None)
+        if top and deep and gk != (pairings[0].get("bat1", {}).get("game_key", "") if pairings else ""):
+            pairings.append({
+                "type": "Type 2 — Regression Bomb + Punisher",
+                "logic": "Same soft arm · chalk star + invisible deep slot bat · different ownership",
+                "bat1": top,
+                "bat2": deep,
+            })
+            break
+
+    # Type 3: Mirror Game — different games, both face sub-avg K/9
+    used_games = {p.get("bat1", {}).get("game_key") for p in pairings}
+    cross_pair = []
+    for b in sorted_b:
+        if b.get("game_key") not in used_games:
+            cross_pair.append(b)
+        if len(cross_pair) == 2:
+            break
+    if len(cross_pair) == 2:
+        pairings.append({
+            "type": "Type 3 — Mirror Game",
+            "logic": "Different games · both face soft arms · cross-game correlated signal",
+            "bat1": cross_pair[0],
+            "bat2": cross_pair[1],
+        })
+
+    # Type 4: C Rule 6 Double — two catchers in ELITE/HIGH games
+    catchers = [b for b in sorted_b if b.get("position") == "C"
+                and b.get("pds_tier") in ("ELITE", "HIGH")]
+    if len(catchers) >= 2:
+        pairings.append({
+            "type": "Type 4 — C Rule 6 Double",
+            "logic": "Two catchers in ELITE/HIGH games · structural underpricing in all markets",
+            "bat1": catchers[0],
+            "bat2": catchers[1],
+        })
+
+    return pairings[:4]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN ORCHESTRATOR
+# ─────────────────────────────────────────────────────────────────────────────
+
+def safe_float(val) -> Optional[float]:
+    try:
+        return float(val) if val not in (None, "", "null", "N/A") else None
+    except (ValueError, TypeError):
+        return None
+
+
+def run():
+    print(f"\n{'='*60}")
+    print(f"Chris's HR Value Model — vElite v4.7")
+    print(f"Date: {TODAY} · Rules: 47 · Engine: score_engine.py")
+    print(f"{'='*60}\n")
+
+    # 1. Fetch all data
+    print("[1/5] Fetching Statcast batter data...")
+    batter_savant = fetch_savant_batter_data()
+
+    print("[2/5] Fetching Statcast pitcher data...")
+    pitcher_savant = fetch_savant_pitcher_data()
+
+    print("[3/5] Fetching today's schedule and starters...")
+    games = fetch_todays_games()
+
+    print("[4/5] Fetching IL transactions...")
+    il_ids = fetch_il_transactions()
+    if il_ids:
+        print(f"  {len(il_ids)} players on IL today.")
+
+    print("[5/5] Scoring all batters...\n")
+
+    all_scored = []
+    game_cards = []
+
+    for game in games:
+        away = game["away_team"]
+        home = game["home_team"]
+        game_key = f"{away}@{home}"
+        print(f"  Processing {game_key}...")
+
+        # Grade both pitchers
+        away_pitcher_id = game.get("away_pitcher_id")
+        home_pitcher_id = game.get("home_pitcher_id")
+        away_pitcher_name = game.get("away_pitcher_name", "TBD")
+        home_pitcher_name = game.get("home_pitcher_name", "TBD")
+
+        away_season = fetch_pitcher_stats_season(away_pitcher_id) if away_pitcher_id else {}
+        home_season = fetch_pitcher_stats_season(home_pitcher_id) if home_pitcher_id else {}
+        time.sleep(0.3)  # Rate limiting
+
+        away_pds = calculate_pitcher_pds(away_pitcher_id, away_pitcher_name, away_season, pitcher_savant)
+        home_pds = calculate_pitcher_pds(home_pitcher_id, home_pitcher_name, home_season, pitcher_savant)
+
+        # Determine elite game for deep lineup grading (Rule 32)
+        max_pds = max(away_pds["pds"], home_pds["pds"])
+        game_tier = ("ELITE" if max_pds >= 85 else
+                     "HIGH" if max_pds >= 70 else
+                     "MED" if max_pds >= 55 else "LOW")
+
+        # Fetch lineups (R34 bilateral — both sides)
+        game_pk = game.get("game_pk")
+        away_lineup = fetch_lineup(game_pk, home=False) if game_pk else []
+        home_lineup = fetch_lineup(game_pk, home=True) if game_pk else []
+
+        # Determine pitcher handedness from roster (approximation)
+        away_pitcher_hand = "R"  # Default — TODO: pull from MLB API
+        home_pitcher_hand = "R"
+
+        # Score away batters vs home pitcher
+        away_batters_scored = []
+        for player in away_lineup:
+            pid = player["player_id"]
+            sd = batter_savant.get(pid, {})
+            if not sd:
+                sd = {"name": player["name"], "player_id": pid, "team": away}
+            sd["player_id"] = pid
+            sd["name"] = player["name"]
+
+            scored = score_batter(
+                batter=sd,
+                pitcher_pds=home_pds,
+                slot=player["slot"],
+                hand=player["hand"],
+                pitcher_hand=home_pitcher_hand,
+                park=home,
+                il_ids=il_ids,
+            )
+            scored["game_key"] = game_key
+            scored["pds_tier"] = game_tier
+            scored["batting_team"] = away
+            scored["fielding_team"] = home
+            scored["pitcher_name"] = home_pitcher_name
+            scored["pitcher_pds"] = home_pds["pds"]
+            away_batters_scored.append(scored)
+
+        # Score home batters vs away pitcher
+        home_batters_scored = []
+        for player in home_lineup:
+            pid = player["player_id"]
+            sd = batter_savant.get(pid, {})
+            if not sd:
+                sd = {"name": player["name"], "player_id": pid, "team": home}
+            sd["player_id"] = pid
+            sd["name"] = player["name"]
+
+            scored = score_batter(
+                batter=sd,
+                pitcher_pds=away_pds,
+                slot=player["slot"],
+                hand=player["hand"],
+                pitcher_hand=away_pitcher_hand,
+                park=home,
+                il_ids=il_ids,
+            )
+            scored["game_key"] = game_key
+            scored["pds_tier"] = game_tier
+            scored["batting_team"] = home
+            scored["fielding_team"] = away
+            scored["pitcher_name"] = away_pitcher_name
+            scored["pitcher_pds"] = away_pds["pds"]
+            home_batters_scored.append(scored)
+
+        all_scored.extend(away_batters_scored)
+        all_scored.extend(home_batters_scored)
+
+        game_cards.append({
+            "game_key": game_key,
+            "away_team": away,
+            "home_team": home,
+            "time": game["time"],
+            "venue": game.get("venue", ""),
+            "park_factor": PARK_FACTORS.get(home, 0),
+            "away_pitcher": {**away_pds, "name": away_pitcher_name},
+            "home_pitcher": {**home_pds, "name": home_pitcher_name},
+            "game_tier": game_tier,
+            "top_pds": max_pds,
+            "away_batters": sorted(away_batters_scored, key=lambda x: x["score"], reverse=True),
+            "home_batters": sorted(home_batters_scored, key=lambda x: x["score"], reverse=True),
+        })
+
+    # Build tickets
+    print("\nBuilding tickets...")
+    tickets = build_tickets(all_scored, games)
+
+    # Assemble final output
+    output = {
+        "generated": TODAY,
+        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "model_version": "vElite v4.7",
+        "rules": 47,
+        "games_today": len(games),
+        "batters_scored": len(all_scored),
+        "game_cards": sorted(game_cards, key=lambda x: x["top_pds"], reverse=True),
+        "tickets": tickets,
+        "top_picks": sorted(all_scored, key=lambda x: x["score"], reverse=True)[:30],
+    }
+
+    # Write output files
+    os.makedirs("output", exist_ok=True)
+    with open("output/player-data.json", "w") as f:
+        json.dump(output, f, indent=2, default=str)
+
+    with open("output/picks.json", "w") as f:
+        picks_summary = {
+            "date": TODAY,
+            "best4": tickets["best4"],
+            "power3": tickets["power3"],
+            "nc4": tickets["nc4"],
+            "super_lotto": tickets["super_lotto"],
+            "pairings": [
+                {
+                    "type": p["type"],
+                    "logic": p["logic"],
+                    "bat1_name": p["bat1"]["name"],
+                    "bat1_score": p["bat1"]["score"],
+                    "bat2_name": p["bat2"]["name"],
+                    "bat2_score": p["bat2"]["score"],
+                }
+                for p in tickets["pairings"] if "bat1" in p and "bat2" in p
+            ],
+        }
+        json.dump(picks_summary, f, indent=2, default=str)
+
+    print(f"\n{'='*60}")
+    print(f"Done. {len(all_scored)} batters scored across {len(games)} games.")
+    print(f"Output: output/player-data.json · output/picks.json")
+    print(f"\nTop 5 picks today:")
+    for b in sorted(all_scored, key=lambda x: x["score"], reverse=True)[:5]:
+        print(f"  {b['score']:3d} · {b['name']:<22} ({b['team']}) "
+              f"vs {b['pitcher_name']} · PDS {b['pitcher_pds']}")
+    print(f"{'='*60}\n")
+
+
+if __name__ == "__main__":
+    run()

@@ -1,0 +1,367 @@
+"""
+Chris's HR Value Model — vElite
+odds_engine.py — Phase 3
+
+Pulls live HR prop odds from The Odds API.
+Compares market implied probability to model implied probability.
+Flags value plays, computes fair odds, outputs edge column.
+
+Requires: THE_ODDS_API_KEY environment variable
+Get a key at: https://theoddsapi.com
+"""
+
+import requests
+import json
+import os
+import datetime
+from typing import Optional
+
+TODAY = datetime.date.today().strftime("%Y-%m-%d")
+
+# The Odds API key — set as GitHub Actions secret
+ODDS_API_KEY = os.environ.get("THE_ODDS_API_KEY", "")
+
+# Calibration table from Phase 2 backtest
+# These are EXAMPLE values — replace with real backtest results
+# Format: {score_floor: implied_probability_pct}
+SCORE_TO_PROB = {
+    90: 32.0,
+    85: 26.0,
+    80: 21.0,
+    75: 17.0,
+    70: 14.0,
+    65: 11.0,
+    60: 9.0,
+    55: 7.0,
+    0:  5.5,   # Baseline
+}
+
+
+def american_to_prob(odds: int) -> float:
+    """Convert American odds to implied probability (vig included)."""
+    if odds > 0:
+        return 100 / (odds + 100) * 100
+    else:
+        return abs(odds) / (abs(odds) + 100) * 100
+
+
+def prob_to_american(prob_pct: float) -> int:
+    """Convert probability to American odds (no vig)."""
+    if prob_pct <= 0 or prob_pct >= 100:
+        return 0
+    if prob_pct >= 50:
+        return -round(prob_pct / (100 - prob_pct) * 100)
+    else:
+        return round((100 - prob_pct) / prob_pct * 100)
+
+
+def score_to_model_prob(score: int) -> float:
+    """Convert model score to implied HR probability using calibration table."""
+    for floor, prob in sorted(SCORE_TO_PROB.items(), reverse=True):
+        if score >= floor:
+            return prob
+    return SCORE_TO_PROB[0]
+
+
+def load_calibration(backtest_file: str = "output/backtest_2025.json") -> None:
+    """Load calibration from Phase 2 backtest results."""
+    global SCORE_TO_PROB
+    try:
+        with open(backtest_file) as f:
+            data = json.load(f)
+        calibration = data.get("calibration", {})
+        # Map tier names back to score floors
+        tier_floors = {
+            "90+": 90, "85-89": 85, "80-84": 80, "75-79": 75,
+            "70-74": 70, "65-69": 65, "60-64": 60, "55-59": 55, "Below 55": 0,
+        }
+        for tier_name, stats in calibration.items():
+            floor = tier_floors.get(tier_name)
+            if floor is not None:
+                SCORE_TO_PROB[floor] = stats.get("hit_rate", SCORE_TO_PROB.get(floor, 5.5))
+        print(f"  Calibration loaded from {backtest_file}")
+    except FileNotFoundError:
+        print(f"  No backtest file found at {backtest_file} — using default calibration.")
+    except Exception as e:
+        print(f"  WARNING: Calibration load failed: {e}")
+
+
+def fetch_mlb_hr_props() -> dict:
+    """
+    Pull today's MLB HR props from The Odds API.
+    Returns dict keyed by player name with market odds from DK + FD.
+
+    API docs: https://theoddsapi.com/documentation/player-props
+    """
+    if not ODDS_API_KEY:
+        print("  WARNING: THE_ODDS_API_KEY not set. Using FanDuel Research as fallback.")
+        return fetch_fanduel_research_fallback()
+
+    base_url = "https://api.the-odds-api.com/v4/sports/baseball_mlb/events"
+    players_odds = {}
+
+    print("  Fetching MLB events from The Odds API...")
+    try:
+        # Step 1: Get today's event IDs
+        r = requests.get(
+            f"{base_url}?apiKey={ODDS_API_KEY}&dateFormat=iso",
+            timeout=20
+        )
+        r.raise_for_status()
+        events = r.json()
+
+        print(f"  Found {len(events)} MLB events today.")
+
+        # Step 2: For each event, get player props
+        for event in events:
+            event_id = event.get("id")
+            home = event.get("home_team", "")
+            away = event.get("away_team", "")
+
+            props_url = (
+                f"{base_url}/{event_id}/odds"
+                f"?apiKey={ODDS_API_KEY}"
+                f"&regions=us"
+                f"&markets=batter_home_runs"
+                f"&oddsFormat=american"
+                f"&bookmakers=draftkings,fanduel"
+            )
+
+            try:
+                pr = requests.get(props_url, timeout=15)
+                pr.raise_for_status()
+                props_data = pr.json()
+
+                for bookmaker in props_data.get("bookmakers", []):
+                    book_key = bookmaker.get("key", "")
+                    for market in bookmaker.get("markets", []):
+                        if market.get("key") != "batter_home_runs":
+                            continue
+                        for outcome in market.get("outcomes", []):
+                            player_name = outcome.get("name", "")
+                            price = outcome.get("price")
+                            if not player_name or price is None:
+                                continue
+
+                            if player_name not in players_odds:
+                                players_odds[player_name] = {
+                                    "name": player_name,
+                                    "game": f"{away} @ {home}",
+                                    "dk_odds": None,
+                                    "fd_odds": None,
+                                }
+
+                            if book_key == "draftkings":
+                                players_odds[player_name]["dk_odds"] = price
+                            elif book_key == "fanduel":
+                                players_odds[player_name]["fd_odds"] = price
+
+            except Exception as e:
+                print(f"    Props fetch failed for {event_id}: {e}")
+                continue
+
+        print(f"  Loaded HR props for {len(players_odds)} players.")
+        return players_odds
+
+    except Exception as e:
+        print(f"  WARNING: The Odds API fetch failed: {e}")
+        return {}
+
+
+def fetch_fanduel_research_fallback() -> dict:
+    """
+    Fallback: scrape today's FanDuel Research HR odds page.
+    Less reliable than The Odds API but free.
+    """
+    print("  Using FanDuel Research fallback for odds...")
+    url = f"https://www.fanduel.com/research/mlb-home-run-prop-odds-{TODAY}"
+    try:
+        r = requests.get(url, timeout=15,
+                         headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code != 200:
+            return {}
+        # Parse the text content for odds
+        # FD Research format: "Player Name (Team): +ODDS to hit a HR"
+        import re
+        text = r.text
+        pattern = r'([A-Z][a-z]+ [A-Z][a-z]+) \([^)]+\): ([+-]\d+) to hit a HR'
+        matches = re.findall(pattern, text)
+        players_odds = {}
+        for name, odds in matches:
+            players_odds[name] = {
+                "name": name,
+                "game": "",
+                "dk_odds": None,
+                "fd_odds": int(odds),
+            }
+        print(f"  Loaded {len(players_odds)} FD Research odds.")
+        return players_odds
+    except Exception as e:
+        print(f"  WARNING: FD Research fallback failed: {e}")
+        return {}
+
+
+def compute_edges(model_picks: list, market_odds: dict) -> list:
+    """
+    Match model picks to market odds and compute edge.
+    Returns enriched pick list with edge analysis.
+    """
+    enriched = []
+
+    for pick in model_picks:
+        name = pick.get("name", "")
+        score = pick.get("score", 0)
+
+        # Try to find in market (fuzzy name match)
+        market = find_in_market(name, market_odds)
+
+        model_prob = score_to_model_prob(score)
+        model_fair_odds = prob_to_american(model_prob)
+
+        if market:
+            dk = market.get("dk_odds")
+            fd = market.get("fd_odds")
+
+            # Use best available market odds
+            best_market_odds = None
+            if dk and fd:
+                # Higher odds = better for bettor
+                best_market_odds = max(dk, fd)
+                best_book = "DK" if dk >= fd else "FD"
+            elif dk:
+                best_market_odds = dk
+                best_book = "DK"
+            elif fd:
+                best_market_odds = fd
+                best_book = "FD"
+            else:
+                best_market_odds = None
+                best_book = None
+
+            if best_market_odds:
+                market_prob = american_to_prob(best_market_odds)
+                edge_pct = model_prob - market_prob
+
+                # Value flag: model thinks it's at least 1.5× the market price
+                value_flag = model_prob >= market_prob * 1.5
+
+                enriched.append({
+                    **pick,
+                    "model_prob": round(model_prob, 1),
+                    "model_fair_odds": model_fair_odds,
+                    "market_odds": best_market_odds,
+                    "market_prob": round(market_prob, 1),
+                    "edge_pct": round(edge_pct, 1),
+                    "best_book": best_book,
+                    "value_flag": value_flag,
+                    "dk_odds": dk,
+                    "fd_odds": fd,
+                    "has_odds": True,
+                })
+            else:
+                enriched.append({
+                    **pick,
+                    "model_prob": round(model_prob, 1),
+                    "model_fair_odds": model_fair_odds,
+                    "has_odds": False,
+                })
+        else:
+            enriched.append({
+                **pick,
+                "model_prob": round(model_prob, 1),
+                "model_fair_odds": model_fair_odds,
+                "has_odds": False,
+            })
+
+    return enriched
+
+
+def find_in_market(name: str, market: dict) -> Optional[dict]:
+    """Fuzzy name matching for player names."""
+    # Direct match
+    if name in market:
+        return market[name]
+
+    # Last name match
+    last = name.split()[-1].lower()
+    for k, v in market.items():
+        if k.split()[-1].lower() == last:
+            return v
+
+    # Partial match
+    name_lower = name.lower()
+    for k, v in market.items():
+        if name_lower in k.lower() or k.lower() in name_lower:
+            return v
+
+    return None
+
+
+def run():
+    """Run Phase 3 odds integration."""
+    print(f"\n{'='*60}")
+    print(f"Odds Engine — Phase 3 · {TODAY}")
+    print(f"{'='*60}\n")
+
+    # Load calibration from Phase 2
+    load_calibration()
+
+    # Load model picks from Phase 1
+    try:
+        with open("output/picks.json") as f:
+            picks_data = json.load(f)
+    except FileNotFoundError:
+        print("ERROR: No picks.json found. Run score_engine.py first.")
+        return
+
+    # Fetch market odds
+    market_odds = fetch_mlb_hr_props()
+
+    # Compute edges for all ticket types
+    all_picks = []
+    for ticket_type in ["best4", "power3", "nc4", "super_lotto"]:
+        picks = picks_data.get(ticket_type, [])
+        enriched = compute_edges(picks, market_odds)
+        all_picks.extend(enriched)
+        picks_data[f"{ticket_type}_with_odds"] = enriched
+
+    # Top value plays (model prob ≥ 1.5× market prob)
+    value_plays = [p for p in all_picks
+                   if p.get("value_flag") and p.get("has_odds")]
+    value_plays = sorted(value_plays, key=lambda x: x.get("edge_pct", 0), reverse=True)
+
+    picks_data["value_plays"] = value_plays
+    picks_data["odds_generated_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+
+    # Print value plays
+    if value_plays:
+        print(f"\n{'='*60}")
+        print(f"VALUE PLAYS — Model prob significantly above market")
+        print(f"{'='*60}")
+        print(f"{'Player':<22} {'Score':>6} {'Model%':>8} {'Market%':>9} {'Edge':>7} {'Odds':>8} {'Book':>5}")
+        print("-" * 65)
+        for p in value_plays:
+            print(
+                f"{p['name']:<22} {p['score']:>6} "
+                f"{p.get('model_prob', 0):>7.1f}% "
+                f"{p.get('market_prob', 0):>8.1f}% "
+                f"{p.get('edge_pct', 0):>+6.1f}% "
+                f"{p.get('market_odds', 0):>+8d} "
+                f"{p.get('best_book', ''):>5}"
+            )
+    else:
+        print("\nNo value plays identified today — market is fairly priced vs model.")
+
+    # Save odds-enriched picks
+    with open("output/picks.json", "w") as f:
+        json.dump(picks_data, f, indent=2, default=str)
+
+    with open("output/value_plays.json", "w") as f:
+        json.dump(value_plays, f, indent=2, default=str)
+
+    print(f"\nSaved to output/picks.json and output/value_plays.json")
+    print(f"{'='*60}\n")
+
+
+if __name__ == "__main__":
+    run()

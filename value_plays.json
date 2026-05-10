@@ -1,0 +1,118 @@
+name: Daily Dinger Report Build
+
+on:
+  schedule:
+    # 9:00 AM ET = 13:00 UTC (EDT) / 14:00 UTC (EST)
+    # Runs every day during MLB season (March through November)
+    - cron: '0 13 * * *'
+
+  # Allow manual trigger from GitHub Actions tab
+  workflow_dispatch:
+    inputs:
+      run_backtest:
+        description: 'Also run backtest (slow - takes ~30 min)'
+        required: false
+        default: 'false'
+      backtest_year:
+        description: 'Year to backtest (2025 or 2026)'
+        required: false
+        default: '2025'
+
+jobs:
+  build-daily-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run Phase 1 — Score Engine
+        run: |
+          echo "Running score_engine.py..."
+          python src/score_engine.py
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+
+      - name: Run Phase 3 — Odds Engine
+        run: |
+          echo "Running odds_engine.py..."
+          python src/odds_engine.py
+        env:
+          THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
+          PYTHONPATH: ${{ github.workspace }}/src
+        # Don't fail the whole build if odds API is down
+        continue-on-error: true
+
+      - name: Run Phase 2 — Backtest (manual trigger only)
+        if: github.event.inputs.run_backtest == 'true'
+        run: |
+          echo "Running backtest for ${{ github.event.inputs.backtest_year }}..."
+          python src/backtest.py --year ${{ github.event.inputs.backtest_year }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+
+      - name: Copy output to site directory
+        run: |
+          cp output/player-data.json site/player-data.json
+          cp output/picks.json site/picks.json
+          # Copy value plays if they exist
+          if [ -f output/value_plays.json ]; then
+            cp output/value_plays.json site/value_plays.json
+          fi
+          # Copy backtest results if they exist
+          for f in output/backtest_*.json; do
+            [ -f "$f" ] && cp "$f" "site/$(basename $f)"
+          done
+          echo "Output files:"
+          ls -la site/*.json
+
+      - name: Commit and push updated data
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "Dinger Report Bot"
+          git add site/*.json
+          # Only commit if there are changes
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Daily build $(date '+%Y-%m-%d %H:%M ET') — auto"
+            git push
+          fi
+
+      - name: Deploy to Netlify
+        uses: netlify/actions/cli@master
+        with:
+          args: deploy --dir=site --prod --message "Daily build $(date '+%Y-%m-%d')"
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+
+      - name: Report summary
+        run: |
+          echo "## Dinger Report Build Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Date: $(date '+%Y-%m-%d %H:%M ET')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f output/picks.json ]; then
+            echo "**Top picks generated:** $(python -c "import json; d=json.load(open('output/picks.json')); print(', '.join([p['name'] for p in d.get('best4', [])]))")" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Site: https://dingerreport.netlify.app" >> $GITHUB_STEP_SUMMARY
